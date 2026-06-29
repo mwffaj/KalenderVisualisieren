@@ -32,7 +32,7 @@
     const start = parseDate(g(C.datumVon));
     if (!start) return;
     const end = parseDate(g(C.datumBis)) || new Date(start);
-    events.push({ start, end, von: g(C.von), bis: g(C.bis), ort: g(C.ort), desc: g(C.beschr), kat: g(C.kat) });
+    events.push({ id: events.length, start, end, von: g(C.von), bis: g(C.bis), ort: g(C.ort), desc: g(C.beschr), kat: g(C.kat) });
   });
 
   if (!events.length) { alert('Keine Termine gefunden.'); return; }
@@ -41,9 +41,11 @@
   events.sort((a, b) => a.start - b.start);
   let month = events[0].start.getMonth();
   let year  = events[0].start.getFullYear();
-  let fontSize   = 10;      // chip font size in px
+  let fontSize   = 10;
   let showLegend = true;
-  const hiddenCats = new Set();
+  const hiddenCats   = new Set();
+  const hiddenEvents = new Set();
+  let updateResetBtn = () => {}; // assigned inside render()
 
   // ── 3. Colors ─────────────────────────────────────────────────────────────
   const PAL = ['#2e86c1','#e67e22','#27ae60','#8e44ad','#c0392b','#16a085','#d35400','#2980b9','#7d3c98','#117a65'];
@@ -53,9 +55,9 @@
   events.forEach(e => catColor(e.kat || ''));
 
   // ── 4. Constants ──────────────────────────────────────────────────────────
-  const MON  = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
-  const WD   = ['Mo','Di','Mi','Do','Fr','Sa','So'];
-  const MAX  = 2;
+  const MON = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+  const WD  = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+  const MAX = 2;
 
   // ── 5. Helpers ────────────────────────────────────────────────────────────
   function el(tag, attrs = {}, ...kids) {
@@ -65,14 +67,14 @@
     return n;
   }
 
-  function navBtn(lbl, fn, title = '') {
-    const b = el('button', { style: 'background:rgba(255,255,255,.18);border:none;color:#fff;min-width:34px;height:34px;border-radius:7px;cursor:pointer;font-size:18px;line-height:1;flex-shrink:0;padding:0 8px', title });
+  function iconBtn(lbl, fn, title = '', bg = 'rgba(255,255,255,.18)') {
+    const b = el('button', { style: `background:${bg};border:none;color:#fff;height:34px;border-radius:7px;cursor:pointer;font-size:13px;line-height:1;flex-shrink:0;padding:0 10px;white-space:nowrap`, title });
     b.textContent = lbl;
     b.onclick = fn;
     return b;
   }
 
-  // ── 6. Dynamic style (font size + hidden categories) ─────────────────────
+  // ── 6. Dynamic style ──────────────────────────────────────────────────────
   let styleEl;
 
   function updateStyle() {
@@ -81,10 +83,61 @@
     hiddenCats.forEach(kat => {
       rules.push(`[data-kat="${kat.replace(/"/g, '\\"')}"] { display: none !important; }`);
     });
+    hiddenEvents.forEach(id => {
+      rules.push(`[data-evid="${id}"] { display: none !important; }`);
+    });
     styleEl.textContent = rules.join('\n');
   }
 
-  // ── 7. Popover ────────────────────────────────────────────────────────────
+  // ── 7. ICS export ─────────────────────────────────────────────────────────
+  function exportICS() {
+    const visible = events.filter(ev => !hiddenEvents.has(ev.id) && !hiddenCats.has(ev.kat || ''));
+    if (!visible.length) { alert('Keine sichtbaren Termine zum Exportieren.'); return; }
+
+    const esc  = s => (s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+    const pad2 = n => String(n).padStart(2, '0');
+    const ymd  = d => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
+    const hms  = t => t.replace(':', '') + '00'; // "17:00" → "170000"
+
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Schulnetz Kalender//DE', 'CALSCALE:GREGORIAN'];
+
+    visible.forEach((ev, i) => {
+      const hasTimes = ev.von && ev.von.match(/\d{2}:\d{2}/);
+      const endDate  = new Date(ev.end);
+      endDate.setDate(endDate.getDate() + 1); // ICS DTEND is exclusive for all-day
+
+      lines.push('BEGIN:VEVENT');
+      lines.push(`UID:schulnetz-${i}-${Date.now()}@ksm`);
+
+      if (hasTimes) {
+        lines.push(`DTSTART:${ymd(ev.start)}T${hms(ev.von)}`);
+        lines.push(`DTEND:${ymd(ev.end)}T${ev.bis ? hms(ev.bis) : hms(ev.von)}`);
+      } else {
+        lines.push(`DTSTART;VALUE=DATE:${ymd(ev.start)}`);
+        lines.push(`DTEND;VALUE=DATE:${ymd(endDate)}`);
+      }
+
+      lines.push(`SUMMARY:${esc(ev.desc)}`);
+      if (ev.ort)  lines.push(`LOCATION:${esc(ev.ort)}`);
+      if (ev.kat)  lines.push(`CATEGORIES:${esc(ev.kat)}`);
+
+      const desc = [ev.kat && `Kategorie: ${ev.kat}`, ev.ort && `Ort: ${ev.ort}`].filter(Boolean).join('\\n');
+      if (desc) lines.push(`DESCRIPTION:${desc}`);
+
+      lines.push('END:VEVENT');
+    });
+
+    lines.push('END:VCALENDAR');
+
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'schulnetz-termine.ics';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ── 8. Popover ────────────────────────────────────────────────────────────
   let popover = null;
 
   function closeP() { if (popover) { popover.remove(); popover = null; } }
@@ -114,9 +167,24 @@
       return r;
     };
     [row('📅', dateLine), row('🕐', timeLine), row('📍', ev.ort), row('🏷', ev.kat)].filter(Boolean).forEach(r => body.appendChild(r));
+
+    // Hide this event button
+    const hideRow = el('div', { style: 'border-top:1px solid #eee;padding-top:8px;margin-top:2px' });
+    const hideBtn = el('button', {
+      style: 'background:#f5f5f5;border:1px solid #ddd;color:#555;border-radius:5px;padding:5px 10px;font-size:11px;cursor:pointer;width:100%',
+    }, '🚫 Diesen Termin ausblenden');
+    hideBtn.onclick = e => {
+      e.stopPropagation();
+      hiddenEvents.add(ev.id);
+      updateStyle();
+      updateResetBtn();
+      closeP();
+    };
+    hideRow.appendChild(hideBtn);
+    body.appendChild(hideRow);
+
     popover.appendChild(body);
 
-    // Position relative to scrollable grid wrapper
     const wrap = document.getElementById('__sn_grid__');
     const gR = wrap.getBoundingClientRect();
     const aR = anchor.getBoundingClientRect();
@@ -131,7 +199,7 @@
     });
   }
 
-  // ── 8. Overlay + render ───────────────────────────────────────────────────
+  // ── 9. Overlay + render ───────────────────────────────────────────────────
   const overlay = el('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:2147483646;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif' });
   overlay.id = '__sn_cal__';
   overlay.addEventListener('click', e => { if (e.target === overlay) { closeP(); overlay.remove(); } });
@@ -144,58 +212,45 @@
     const modal = el('div', { style: 'background:#fff;border-radius:14px;width:96vw;max-width:1300px;height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6)' });
     overlay.appendChild(modal);
 
-    // Dynamic style tag
     styleEl = el('style');
     modal.appendChild(styleEl);
     updateStyle();
 
-    // Close popover when clicking anywhere in the modal that isn't a chip or the popover itself
     modal.addEventListener('click', e => {
-      if (popover && !popover.contains(e.target) && !e.target.closest('[data-ev]') && !e.target.closest('[data-mehr]')) {
-        closeP();
-      }
+      if (popover && !popover.contains(e.target) && !e.target.closest('[data-ev]') && !e.target.closest('[data-mehr]')) closeP();
     });
 
     // ── Header ──
     const hdr = el('div', { style: 'background:#1b4f72;color:#fff;padding:10px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap' });
 
-    // Left: month nav
     const leftGrp = el('div', { style: 'display:flex;align-items:center;gap:6px' });
     leftGrp.append(
-      navBtn('‹', () => { if (--month < 0) { month = 11; year--; } render(); }, 'Vorheriger Monat'),
-      navBtn('›', () => { if (++month > 11) { month = 0; year++; } render(); }, 'Nächster Monat')
+      iconBtn('‹', () => { if (--month < 0) { month = 11; year--; } render(); }, 'Vorheriger Monat'),
+      iconBtn('›', () => { if (++month > 11) { month = 0; year++; } render(); }, 'Nächster Monat')
     );
 
-    // Center: title
     const titleDiv = el('div', { style: 'flex:1;text-align:center;min-width:160px' });
     titleDiv.innerHTML = `<div style="font-size:19px;font-weight:700">${MON[month]} ${year}</div>
       <div style="font-size:10px;opacity:.7">${events.length} Termine geladen</div>`;
 
-    // Right: controls
-    const rightGrp = el('div', { style: 'display:flex;align-items:center;gap:6px' });
+    const rightGrp = el('div', { style: 'display:flex;align-items:center;gap:6px;flex-wrap:wrap' });
 
-    // Font size buttons
-    const fontLabel = el('span', { style: 'font-size:11px;opacity:.8;margin-right:2px' }, 'Schrift:');
-    const btnFontDec = navBtn('A−', () => { if (fontSize > 7) { fontSize--; updateStyle(); } }, 'Schrift kleiner');
-    const btnFontInc = navBtn('A+', () => { if (fontSize < 15) { fontSize++; updateStyle(); } }, 'Schrift grösser');
-    btnFontDec.style.fontSize = '13px';
-    btnFontInc.style.fontSize = '13px';
+    const fontLabel = el('span', { style: 'font-size:11px;opacity:.8' }, 'Schrift:');
 
-    // Legend toggle button
-    const btnLeg = navBtn('🏷 Legende', () => {
+    const btnFontDec = iconBtn('A−', () => { if (fontSize > 7) { fontSize--; updateStyle(); } }, 'Schrift kleiner');
+    const btnFontInc = iconBtn('A+', () => { if (fontSize < 15) { fontSize++; updateStyle(); } }, 'Schrift grösser');
+
+    const btnLeg = iconBtn('🏷 Legende', () => {
       showLegend = !showLegend;
       legendEl.style.display = showLegend ? 'flex' : 'none';
       btnLeg.style.opacity = showLegend ? '1' : '0.5';
     }, 'Legende ein-/ausblenden');
-    btnLeg.style.fontSize = '12px';
-    btnLeg.style.padding = '0 10px';
 
-    // Close button
-    const btnClose = navBtn('✕', () => { closeP(); overlay.remove(); }, 'Schliessen');
-    btnClose.style.background = 'rgba(255,255,255,.15)';
-    btnClose.style.fontSize = '15px';
+    const btnExport = iconBtn('⬇ .ics', exportICS, 'Sichtbare Termine als Kalenderdatei exportieren', 'rgba(255,255,255,.25)');
 
-    rightGrp.append(fontLabel, btnFontDec, btnFontInc, btnLeg, btnClose);
+    const btnClose = iconBtn('✕', () => { closeP(); overlay.remove(); }, 'Schliessen', 'rgba(255,255,255,.15)');
+
+    rightGrp.append(fontLabel, btnFontDec, btnFontInc, btnLeg, btnExport, btnClose);
     hdr.append(leftGrp, titleDiv, rightGrp);
     modal.appendChild(hdr);
 
@@ -240,9 +295,10 @@
       const makeChip = (ev, hidden = false) => {
         const color = catColor(ev.kat || '');
         const chip  = el('div', {
-          'class': 'ev-chip',
-          'data-ev': '1',
+          'class':    'ev-chip',
+          'data-ev':  '1',
           'data-kat': ev.kat || '',
+          'data-evid': String(ev.id),
           ...(hidden ? { 'data-hidden': '1' } : {}),
           style: `background:${color};color:#fff;border-radius:3px;padding:1px 4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer`,
         }, (ev.von ? ev.von + ' ' : '') + ev.desc);
@@ -276,37 +332,43 @@
     modal.appendChild(wrap);
 
     // ── Legend ──
-    const legendEl = el('div', { style: `padding:8px 14px;border-top:1px solid #eee;display:flex;flex-wrap:wrap;gap:6px;flex-shrink:0;background:#fafafa;align-items:center` });
-
-    const legTitle = el('span', { style: 'font-size:10px;font-weight:700;color:#888;margin-right:4px;text-transform:uppercase;letter-spacing:.05em' }, 'Kategorien:');
-    legendEl.appendChild(legTitle);
+    const legendEl = el('div', { style: 'padding:8px 14px;border-top:1px solid #eee;display:flex;flex-wrap:wrap;gap:6px;flex-shrink:0;background:#fafafa;align-items:center' });
+    legendEl.appendChild(el('span', { style: 'font-size:10px;font-weight:700;color:#888;margin-right:4px;text-transform:uppercase;letter-spacing:.05em' }, 'Kategorien:'));
 
     Object.entries(catMap).forEach(([kat, color]) => {
       const isHidden = hiddenCats.has(kat);
       const chip = el('div', {
-        style: [
-          `background:${isHidden ? '#ddd' : color};color:${isHidden ? '#999' : '#fff'}`,
-          'border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer',
-          `text-decoration:${isHidden ? 'line-through' : 'none'}`,
-          'user-select:none;transition:all .15s',
-          `title:${kat || 'Ohne Kategorie'}`,
-        ].join(';'),
+        style: `background:${isHidden ? '#ddd' : color};color:${isHidden ? '#999' : '#fff'};border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;text-decoration:${isHidden ? 'line-through' : 'none'};user-select:none`,
+        title: isHidden ? 'Klicken zum Einblenden' : 'Klicken zum Ausblenden',
       }, kat || 'Ohne Kategorie');
 
-      chip.title = isHidden ? 'Klicken zum Einblenden' : 'Klicken zum Ausblenden';
       chip.onclick = () => {
         if (hiddenCats.has(kat)) hiddenCats.delete(kat);
         else hiddenCats.add(kat);
         updateStyle();
-        // Update chip appearance
         const hidden = hiddenCats.has(kat);
-        chip.style.background       = hidden ? '#ddd' : color;
-        chip.style.color            = hidden ? '#999' : '#fff';
-        chip.style.textDecoration   = hidden ? 'line-through' : 'none';
+        chip.style.background     = hidden ? '#ddd' : color;
+        chip.style.color          = hidden ? '#999' : '#fff';
+        chip.style.textDecoration = hidden ? 'line-through' : 'none';
         chip.title = hidden ? 'Klicken zum Einblenden' : 'Klicken zum Ausblenden';
       };
       legendEl.appendChild(chip);
     });
+
+    // "Ausgeblendete einblenden"-Button (always present, shown only when needed)
+    const resetBtn = el('button', {
+      style: 'margin-left:auto;background:#e8f4fb;border:1px solid #aed6f1;color:#1b4f72;border-radius:5px;padding:3px 10px;font-size:10px;cursor:pointer;white-space:nowrap;display:none',
+      title: 'Alle einzeln ausgeblendeten Termine wieder einblenden',
+    }, '');
+    resetBtn.onclick = () => { hiddenEvents.clear(); render(); };
+    legendEl.appendChild(resetBtn);
+
+    updateResetBtn = () => {
+      const n = hiddenEvents.size;
+      resetBtn.style.display = n > 0 ? '' : 'none';
+      resetBtn.textContent = `↩ ${n} Termin${n > 1 ? 'e' : ''} einblenden`;
+    };
+    updateResetBtn();
 
     modal.appendChild(legendEl);
   };
