@@ -45,6 +45,7 @@
   let showLegend = true;
   const hiddenCats   = new Set();
   const hiddenEvents = new Set();
+  const hideHistory  = []; // stack for step-by-step undo
   let updateResetBtn = () => {}; // assigned inside render()
 
   // ── 3. Colors ─────────────────────────────────────────────────────────────
@@ -176,6 +177,7 @@
     hideBtn.onclick = e => {
       e.stopPropagation();
       hiddenEvents.add(ev.id);
+      hideHistory.push(ev.id);
       updateStyle();
       updateResetBtn();
       closeP();
@@ -355,18 +357,32 @@
       legendEl.appendChild(chip);
     });
 
-    // "Ausgeblendete einblenden"-Button (always present, shown only when needed)
-    const resetBtn = el('button', {
+    // Undo buttons (always present, shown only when needed)
+    const btnUndoLast = el('button', {
       style: 'margin-left:auto;background:#e8f4fb;border:1px solid #aed6f1;color:#1b4f72;border-radius:5px;padding:3px 10px;font-size:10px;cursor:pointer;white-space:nowrap;display:none',
-      title: 'Alle einzeln ausgeblendeten Termine wieder einblenden',
+      title: 'Letzte Ausblendung rückgängig machen',
     }, '');
-    resetBtn.onclick = () => { hiddenEvents.clear(); render(); };
-    legendEl.appendChild(resetBtn);
+    btnUndoLast.onclick = () => {
+      const id = hideHistory.pop();
+      if (id !== undefined) hiddenEvents.delete(id);
+      updateStyle();
+      updateResetBtn();
+    };
+
+    const btnUndoAll = el('button', {
+      style: 'background:#fdebd0;border:1px solid #f0b27a;color:#784212;border-radius:5px;padding:3px 10px;font-size:10px;cursor:pointer;white-space:nowrap;display:none',
+      title: 'Alle ausgeblendeten Einzeltermine wieder einblenden',
+    }, '');
+    btnUndoAll.onclick = () => { hiddenEvents.clear(); hideHistory.length = 0; render(); };
+
+    legendEl.append(btnUndoLast, btnUndoAll);
 
     updateResetBtn = () => {
       const n = hiddenEvents.size;
-      resetBtn.style.display = n > 0 ? '' : 'none';
-      resetBtn.textContent = `↩ ${n} Termin${n > 1 ? 'e' : ''} einblenden`;
+      btnUndoLast.style.display = n > 0 ? '' : 'none';
+      btnUndoLast.textContent = `↩ Letzte rückgängig (${n})`;
+      btnUndoAll.style.display = n > 1 ? '' : 'none';
+      btnUndoAll.textContent = `↩↩ Alle ${n} einblenden`;
     };
     updateResetBtn();
 
